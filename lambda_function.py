@@ -1,4 +1,5 @@
 import os
+import time
 
 from selenium import webdriver
 from selenium.common.exceptions import ElementNotInteractableException
@@ -17,6 +18,7 @@ def wait_for_element(driver, xpath):
 
 
 MAIN_URL = "https://dhlottery.co.kr/common.do?method=main"
+MOBILE_MAIN_URL = "https://m.dhlottery.co.kr/common.do?method=main"
 
 XPATH_MAP = {
     "login_page_button": "/html/body/div[1]/header/div[2]/div[2]/form/div/ul/li[1]/a",
@@ -35,6 +37,15 @@ XPATH_MAP = {
     "buy_confirm_button": '//*[@id="closeLayer"]',
 }
 
+XPATH_MOBILE = {
+    "goto_pension_buy": '//*[@id="slick-slide10"]/div[3]/a',
+    "buy_pension_button": '//*[@id="wrapper"]/div/a',
+    "choose_numbers": '//*[@id="container"]/div[1]/div[1]/div[4]/div/a',
+    "auto_numbers": '//*[@id="popup4"]/article/div[1]/ul/li[2]/div/a[2]',
+    "confirm_numbers": '//*[@id="popup4"]/article/div[2]/a',
+    "final_pension_buy_button": '//*[@id="container"]/div[1]/div[1]/div[5]/div/a'
+}
+
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_5) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/67.0.3396.87 Safari/537.36"
@@ -47,6 +58,7 @@ def init_driver():
     options.add_argument("--headless")
     options.add_argument("--single-process")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
     options.add_argument(f"user-agent={USER_AGENT}")
     options.binary_location = "./chrome_bins/headless-chromium"
     chrome_driver = webdriver.Chrome("./chrome_bins/chromedriver", options=options)
@@ -110,6 +122,41 @@ def buy_lotto(driver):
         print("구매한도 초과입니다.")
 
 
+def go_mobile(driver):
+    driver.get(MOBILE_MAIN_URL)
+
+
+def buy_pension_lotto(driver):
+    goto_pension_buy = driver.find_element_by_xpath(XPATH_MOBILE["goto_pension_buy"])
+    goto_pension_buy.click()
+
+    buy_pension_button = driver.find_element_by_xpath(XPATH_MOBILE["buy_pension_button"])
+    buy_pension_button.click()
+
+    choose_numbers = driver.find_element_by_xpath(XPATH_MOBILE["choose_numbers"])
+    choose_numbers.click()
+
+    auto_numbers = driver.find_element_by_xpath(XPATH_MOBILE["auto_numbers"])
+    auto_numbers.click()
+
+    time.sleep(3)
+
+    confirm_numbers = driver.find_element_by_xpath(XPATH_MOBILE["confirm_numbers"])
+    confirm_numbers.click()
+
+    time.sleep(3)
+
+    final_pension_buy_button = driver.find_element_by_xpath(XPATH_MOBILE["final_pension_buy_button"])
+    final_pension_buy_button.click()
+
+    time.sleep(3)
+
+    alert = driver.switch_to.alert
+    alert.accept()
+
+    time.sleep(3)
+
+
 def lambda_handler(*args, **kwargs):
     chrome_driver = init_driver()
 
@@ -121,9 +168,10 @@ def lambda_handler(*args, **kwargs):
             os.environ["DH_LOTTO_PASSWORD"],
         )
         print("Login Done...")
-        goto_lotto_buy(chrome_driver)
+        go_mobile(chrome_driver)
         print("In Lotto Buy Window...")
-        buy_lotto(chrome_driver)
+        buy_pension_lotto(chrome_driver)
         print("Task Done")
+
     finally:
         chrome_driver.quit()
