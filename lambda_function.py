@@ -1,6 +1,9 @@
+import datetime
 import os
 import time
+from typing import NamedTuple
 
+import boto3
 from selenium import webdriver
 from selenium.common.exceptions import ElementNotInteractableException
 from selenium.webdriver import ActionChains
@@ -9,6 +12,8 @@ from selenium.webdriver.support.select import Select
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.support.wait import WebDriverWait
+
+from bs4 import BeautifulSoup
 
 
 def wait_for_element(driver, xpath):
@@ -19,6 +24,7 @@ def wait_for_element(driver, xpath):
 
 MAIN_URL = "https://dhlottery.co.kr/common.do?method=main"
 MOBILE_MAIN_URL = "https://m.dhlottery.co.kr/common.do?method=main"
+MY_PAGE_URL = "https://m.dhlottery.co.kr/myPage.do?method=lottoBuyListView"
 
 XPATH_MAP = {
     "login_page_button": "/html/body/div[1]/header/div[2]/div[2]/form/div/ul/li[1]/a",
@@ -43,7 +49,9 @@ XPATH_MOBILE = {
     "choose_numbers": '//*[@id="container"]/div[1]/div[1]/div[4]/div/a',
     "auto_numbers": '//*[@id="popup4"]/article/div[1]/ul/li[2]/div/a[2]',
     "confirm_numbers": '//*[@id="popup4"]/article/div[2]/a',
-    "final_pension_buy_button": '//*[@id="container"]/div[1]/div[1]/div[5]/div/a'
+    "final_pension_buy_button": '//*[@id="container"]/div[1]/div[1]/div[5]/div/a',
+    "table_iframe": '//*[@id="lottoBuyList"]',
+    "result_table": "/html/body/div/div[1]/div/table",
 }
 
 USER_AGENT = (
@@ -130,7 +138,9 @@ def buy_pension_lotto(driver):
     goto_pension_buy = driver.find_element_by_xpath(XPATH_MOBILE["goto_pension_buy"])
     goto_pension_buy.click()
 
-    buy_pension_button = driver.find_element_by_xpath(XPATH_MOBILE["buy_pension_button"])
+    buy_pension_button = driver.find_element_by_xpath(
+        XPATH_MOBILE["buy_pension_button"]
+    )
     buy_pension_button.click()
 
     choose_numbers = driver.find_element_by_xpath(XPATH_MOBILE["choose_numbers"])
@@ -146,7 +156,9 @@ def buy_pension_lotto(driver):
 
     time.sleep(3)
 
-    final_pension_buy_button = driver.find_element_by_xpath(XPATH_MOBILE["final_pension_buy_button"])
+    final_pension_buy_button = driver.find_element_by_xpath(
+        XPATH_MOBILE["final_pension_buy_button"]
+    )
     final_pension_buy_button.click()
 
     time.sleep(3)
@@ -157,7 +169,58 @@ def buy_pension_lotto(driver):
     time.sleep(3)
 
 
-def lambda_handler(*args, **kwargs):
+def get_result_table(driver):
+    driver.get(MY_PAGE_URL)
+
+    table_iframe = driver.find_element_by_xpath(XPATH_MOBILE["table_iframe"])
+    driver.switch_to.frame(table_iframe)
+
+    result_table = driver.find_element_by_xpath(XPATH_MOBILE["result_table"])
+    return result_table.get_attribute("outerHTML")
+
+
+class WinResult(NamedTuple):
+    date: datetime.date
+    result: str
+
+    @property
+    def is_win(self):
+        return (
+            self.date == datetime.date.today().strftime("%y-%m-%d")
+            and self.result == "당첨"
+        )
+
+
+def parse_table_and_check(table):
+    def check_win(row) -> bool:
+        date, _, _, _, result, *_ = row.find_all("td")
+        return WinResult(date=date.text.strip(), result=result.text.strip()).is_win
+
+    soup = BeautifulSoup(table, "html.parser")
+    trs = soup.find_all("tr")[1:]
+
+    results = [check_win(tr) for tr in trs]
+    return all(results)
+
+
+def publish_result(message):
+    sns = boto3.client("sns")
+    sns.publish(
+        TopicArn=os.environ["TopicArn"],
+        Message=message,
+    )
+
+
+class ChromeDriver:
+    def __enter__(self):
+        self.driver = init_driver()
+        return self.driver
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.driver.quit()
+
+
+def buy_pensions(*args, **kwargs):
     chrome_driver = init_driver()
 
     try:
@@ -175,3 +238,25 @@ def lambda_handler(*args, **kwargs):
 
     finally:
         chrome_driver.quit()
+
+
+def check_pension_wins():
+    with ChromeDriver() as driver:
+        perform_login(
+            driver,
+            os.environ["DH_LOTTO_USERNAME"],
+            os.environ["DH_LOTTO_PASSWORD"],
+        )
+        go_mobile(driver)
+        result_table = get_result_table(driver)
+        is_win = parse_table_and_check(result_table)
+    if is_win:
+        msg = "당첨 당첨!!"
+    else:
+        msg = "낙첨.. 다음 기회에..."
+
+    publish_result(msg)
+
+
+def lambda_handler(*args, **kwargs):
+    check_pension_wins()
