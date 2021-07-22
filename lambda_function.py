@@ -1,7 +1,7 @@
 import datetime
 import os
 import time
-from typing import NamedTuple
+from typing import NamedTuple, List
 
 import boto3
 from selenium import webdriver
@@ -72,6 +72,11 @@ def init_driver():
     chrome_driver = webdriver.Chrome("./chrome_bins/chromedriver", options=options)
     chrome_driver.get(MAIN_URL)
     return chrome_driver
+
+
+def clear_popups(driver):
+    target = driver.window_handles[0]
+    driver.switch_to.window(target)
 
 
 def perform_login(driver, username, password):
@@ -179,28 +184,55 @@ def get_result_table(driver):
     return result_table.get_attribute("outerHTML")
 
 
-class WinResult(NamedTuple):
-    date: datetime.date
-    result: str
+class WinResult:
+    def __init__(self, buy_date, round_num, lotto_type, quantity, result, win_amount, open_date):
+        self.buy_date = buy_date
+        self.round_num = round_num
+        self.lotto_type = lotto_type
+        self.quantity = quantity
+        self.result = result
+        self.win_amount = win_amount
+        self.open_date = open_date
+
+    def __repr__(self):
+        return f"{self.open_date} {self.round_num} 회차 {self.lotto_type} 결과: {self.result} 금액: {self.win_amount}"
+
+    @classmethod
+    def parse_tds(cls, tds) -> "WinResult":
+        return cls(*[td.text.strip() for td in tds])
 
     @property
     def is_win(self):
         return (
-            self.date == datetime.date.today().strftime("%y-%m-%d")
+            self.open_date == datetime.date.today().strftime("%y-%m-%d")
             and self.result == "당첨"
         )
 
+    def to_message(self):
+        return str(self)
 
-def parse_table_and_check(table):
-    def check_win(row) -> bool:
-        date, _, _, _, result, *_ = row.find_all("td")
-        return WinResult(date=date.text.strip(), result=result.text.strip()).is_win
 
+class WinResultSet:
+    def __init__(self, win_results: List[WinResult]):
+        self._win_results = win_results
+        self._is_win = False
+
+    def __repr__(self):
+        return "\n".join([win_result.to_message() for win_result in self._win_results])
+
+    @property
+    def is_win(self) -> bool:
+        self._is_win = all([win_result.is_win for win_result in self._win_results])
+        return self._is_win
+
+    def to_message(self) -> str:
+        return str(self)
+
+
+def parse_table(table) -> WinResultSet:
     soup = BeautifulSoup(table, "html.parser")
     trs = soup.find_all("tr")[1:]
-
-    results = [check_win(tr) for tr in trs]
-    return all(results)
+    return WinResultSet([WinResult.parse_tds(tr.find_all("td")) for tr in trs])
 
 
 def publish_result(message):
@@ -242,6 +274,7 @@ def buy_pensions(*args, **kwargs):
 
 def check_pension_wins():
     with ChromeDriver() as driver:
+        clear_popups(driver)
         perform_login(
             driver,
             os.environ["DH_LOTTO_USERNAME"],
@@ -249,13 +282,9 @@ def check_pension_wins():
         )
         go_mobile(driver)
         result_table = get_result_table(driver)
-        is_win = parse_table_and_check(result_table)
-    if is_win:
-        msg = "당첨 당첨!!"
-    else:
-        msg = "낙첨.. 다음 기회에..."
+        win_result_set = parse_table(result_table)
 
-    publish_result(msg)
+    publish_result(win_result_set.to_message())
 
 
 def lambda_handler(*args, **kwargs):
